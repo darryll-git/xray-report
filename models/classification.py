@@ -12,6 +12,8 @@ class XRayClassifier:
         self.view_classifier = None
         self.abnormality_model = None
         self.torchxrv_model = None
+
+        self.load_view_classifier()
         
     def load_view_classifier(self):
         """Load AP/PA view classifier - uses custom model with segmentation"""

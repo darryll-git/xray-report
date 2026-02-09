@@ -16,5 +16,5 @@ monai
 einops
 timm
 albumentations
-opencv-python
+opencv-python-headless
 python-docx
