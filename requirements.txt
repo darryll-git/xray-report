@@ -16,3 +16,4 @@ monai
 einops
 timm
 albumentations
+opencv-python
