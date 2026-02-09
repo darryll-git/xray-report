@@ -1,5 +1,3 @@
-#app.py
-
 import streamlit as st
 import torch
 from PIL import Image
@@ -9,7 +7,6 @@ import os
 from dotenv import load_dotenv
 import matplotlib.pyplot as plt
 import cv2
-
 
 # Add current directory to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -21,7 +18,6 @@ from models.segmentation import AnatomySegmenter
 from models.classification import XRayClassifier
 from models.measurements import XRayMeasurements
 from models.report_generator import ReportGenerator
-
 from models.pulmonary_analysis import PulmonaryEdemaAnalyzer, LungFissureDetector
 from utils.visualization import create_enhanced_visualization
 
@@ -40,98 +36,75 @@ if 'analysis_done' not in st.session_state:
     st.session_state.analysis_done = False
     st.session_state.results = None
     st.session_state.image = None
+    st.session_state.models_loaded = False
 
 # Check device
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-@st.cache_resource
 def load_models():
-    """Load all models - cached to avoid reloading"""
-    with st.spinner("Loading models... This may take a minute on first run."):
-        preprocessor = XRayPreprocessor()
-        segmenter = AnatomySegmenter(device=device)
-        classifier = XRayClassifier(device=device)
-        measurements = XRayMeasurements()
-        
-
-        with st.spinner("Loading view classifier..."):
-            try:
-                classifier.load_view_classifier()
-                st.success("✓ View classifier loaded")
-            except Exception as e:
-                st.error(f"❌ Failed to load view classifier: {e}")
-                st.error("Please check your internet connection and try again.")
-                raise  # Stop execution if view classifier fails
-
-
-        # Load classification models
+    """Load all models with better error handling - NOT cached to allow retry"""
+    
+    preprocessor = XRayPreprocessor()
+    segmenter = AnatomySegmenter(device=device)
+    classifier = XRayClassifier(device=device)
+    measurements = XRayMeasurements()
+    
+    # Track loading status
+    status = {
+        'view_classifier': False,
+        'abnormality_detector': False,
+        'report_generator': False
+    }
+    
+    # Load view classifier (CRITICAL - must succeed)
+    with st.spinner("Loading view classifier... (This is required)"):
         try:
-            classifier.load_abnormality_detector()
-        except:
-            st.warning("Could not load abnormality detector. Using fallback methods.")
-        
+            success = classifier.load_view_classifier()
+            status['view_classifier'] = success
+            if success:
+                st.success("✓ View classifier loaded successfully")
+        except Exception as e:
+            st.error(f"❌ CRITICAL: Failed to load view classifier")
+            st.error(f"Error: {str(e)}")
+            st.error("This model is required for analysis. Please:")
+            st.info("1. Check your internet connection\n2. Wait a moment and refresh the page\n3. If problem persists, the model server may be down")
+            raise
+
+    # Load abnormality detector (IMPORTANT but not critical)
+    with st.spinner("Loading abnormality detector..."):
         try:
-            classifier.load_view_classifier()
-        except:
-            st.warning("Could not load view classifier. Using heuristic methods.")
-        
-        # Initialize report generator
+            success = classifier.load_abnormality_detector()
+            status['abnormality_detector'] = success
+            if success:
+                st.success("✓ Abnormality detector loaded")
+            else:
+                st.warning("⚠ Abnormality detector failed - will use basic analysis")
+        except Exception as e:
+            st.warning(f"⚠ Could not load abnormality detector: {e}")
+            st.info("Analysis will continue with limited abnormality detection")
+    
+    # Initialize report generator
+    try:
         groq_api_key = os.getenv('GROQ_API_KEY')
-        report_gen = ReportGenerator(api_key=groq_api_key)
-        
-        return preprocessor, segmenter, classifier, measurements, report_gen
-
-# def create_visualization(image, results):
-#     """Create visualization overlays"""
-#     img_array = np.array(image.convert('RGB'))
-#     masks = results['masks']
+        if groq_api_key:
+            report_gen = ReportGenerator(api_key=groq_api_key)
+            status['report_generator'] = True
+            st.success("✓ Report generator initialized")
+        else:
+            report_gen = ReportGenerator(api_key=None)
+            status['report_generator'] = False
+            st.warning("⚠ Groq API key not found - using template reports")
+    except Exception as e:
+        st.warning(f"⚠ Report generator issue: {e}")
+        report_gen = None
     
-#     # Create segmentation overlay
-#     segmented_img = img_array.copy()
-    
-#     # Overlay lungs in blue
-#     lung_colored = np.zeros_like(img_array)
-#     lung_colored[masks['lungs'] > 0] = [0, 0, 255]
-#     segmented_img = np.where(lung_colored > 0, 
-#                              (segmented_img * 0.6 + lung_colored * 0.4).astype(np.uint8),
-#                              segmented_img)
-    
-#     # Overlay heart in red
-#     heart_colored = np.zeros_like(img_array)
-#     heart_colored[masks['heart'] > 0] = [255, 0, 0]
-#     segmented_img = np.where(heart_colored > 0,
-#                             (segmented_img * 0.6 + heart_colored * 0.4).astype(np.uint8),
-#                             segmented_img)
-    
-#     # Draw rib markers if available
-#     if 'inspiration' in results and 'positions' in results['inspiration']:
-#         for i, pos in enumerate(results['inspiration']['positions']):
-#             # Draw circle
-#             cv2.circle(segmented_img, (int(pos[0]), int(pos[1])), 5, (0, 255, 255), -1)
-#             # Draw label
-#             cv2.putText(segmented_img, f'R{i+1}', 
-#                        (int(pos[0])+10, int(pos[1])),
-#                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-    
-#     # Draw costophrenic angle markers
-#     if 'costophrenic_angles' in results and 'angles' in results['costophrenic_angles']:
-#         for angle_data in results['costophrenic_angles']['angles']:
-#             pos = angle_data['position']
-#             color = (0, 255, 0) if angle_data['sharp'] else (255, 165, 0)
-#             cv2.circle(segmented_img, pos, 8, color, 2)
-#             # Label with angle if available
-#             if angle_data.get('angle'):
-#                 label = f"{angle_data['angle']:.0f}°"
-#                 cv2.putText(segmented_img, label,
-#                            (pos[0]+15, pos[1]),
-#                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-    
-#     return Image.fromarray(segmented_img)
+    return preprocessor, segmenter, classifier, measurements, report_gen, status
 
 
 def create_visualization(image, results):
-    """Use the new enhanced visualization"""
+    """Use the enhanced visualization"""
     return create_enhanced_visualization(image, results)
+
 
 def analyze_xray(image, preprocessor, segmenter, classifier, measurements, report_gen, patient_info=None):
     """Complete X-ray analysis pipeline with pulmonary analysis"""
@@ -144,20 +117,24 @@ def analyze_xray(image, preprocessor, segmenter, classifier, measurements, repor
     with st.spinner("Step 1/7: Preprocessing image..."):
         enhanced_img = preprocessor.enhance_contrast(image)
         tensor_xrv = preprocessor.preprocess_for_torchxrayvision(enhanced_img)
-        view_result = classifier.classify_view(image, tensor_xrv)
     
     with st.spinner("Step 2/7: Classifying view and segmentation..."):
-        results['view_classification'] = view_result
-        ml_mask = view_result.get('mask', None)
+        try:
+            view_result = classifier.classify_view(image, tensor_xrv)
+            results['view_classification'] = view_result
+            ml_mask = view_result.get('mask', None)
 
-        if view_result and 'age' in view_result:
-            results['patient_age'] = view_result['age']
-            results['patient_female_prob'] = 1.0 if view_result.get('gender') == 'Female' else 0.0
+            if view_result and 'age' in view_result:
+                results['patient_age'] = view_result['age']
+                results['patient_female_prob'] = 1.0 if view_result.get('gender') == 'Female' else 0.0
 
-        rotation_result = classifier.check_rotation(image)
-        rotation_result['assessment'] = rotation_result.get('message', "Rotation assessment unavailable")
-        rotation_result['symmetric'] = rotation_result.get('symmetric', False)
-        results['rotation'] = rotation_result
+            rotation_result = classifier.check_rotation(image)
+            rotation_result['assessment'] = rotation_result.get('message', "Rotation assessment unavailable")
+            rotation_result['symmetric'] = rotation_result.get('symmetric', False)
+            results['rotation'] = rotation_result
+        except Exception as e:
+            st.error(f"Error in view classification: {e}")
+            raise
     
     with st.spinner("Step 3/7: Segmenting anatomical structures..."):
         masks = segmenter.segment_all(enhanced_img, use_ml_model=True, ml_masks=ml_mask)
@@ -165,16 +142,26 @@ def analyze_xray(image, preprocessor, segmenter, classifier, measurements, repor
         results['segmentation_method'] = masks.get('method', 'unknown')
     
     with st.spinner("Step 4/7: Detecting abnormalities..."):
-        abnormality_results = classifier.detect_abnormalities(tensor_xrv)
-        findings = abnormality_results.get('findings', {})
-        results['abnormalities'] = findings
-        results['significant_findings'] = abnormality_results.get('significant', {})
-    
-    # PULMONARY ANALYSIS - NEW
-    with st.spinner("Step 5/7: Analyzing pulmonary patterns (edema & fissures)..."):
         try:
-            from models.pulmonary_analysis import PulmonaryEdemaAnalyzer, LungFissureDetector
-            
+            if classifier.torchxrv_model is not None:
+                abnormality_results = classifier.detect_abnormalities(tensor_xrv)
+                findings = abnormality_results.get('findings', {})
+                results['abnormalities'] = findings
+                results['significant_findings'] = abnormality_results.get('significant', {})
+            else:
+                st.warning("Skipping abnormality detection - model not loaded")
+                results['abnormalities'] = {}
+                results['significant_findings'] = {}
+                findings = {}
+        except Exception as e:
+            st.warning(f"Error in abnormality detection: {e}")
+            results['abnormalities'] = {}
+            results['significant_findings'] = {}
+            findings = {}
+    
+    # PULMONARY ANALYSIS
+    with st.spinner("Step 5/7: Analyzing pulmonary patterns..."):
+        try:
             edema_analyzer = PulmonaryEdemaAnalyzer()
             fissure_detector = LungFissureDetector()
             
@@ -194,8 +181,6 @@ def analyze_xray(image, preprocessor, segmenter, classifier, measurements, repor
             
         except Exception as e:
             st.error(f"Error in pulmonary analysis: {e}")
-            import traceback
-            st.code(traceback.format_exc())
             results['edema_pattern'] = None
             results['fissures'] = None
     
@@ -234,8 +219,15 @@ def analyze_xray(image, preprocessor, segmenter, classifier, measurements, repor
         angles_result = measurements.check_costophrenic_angles(masks['lungs'])
         results['costophrenic_angles'] = angles_result
         
-        report = report_gen.generate_structured_report(image, results, patient_info)
-        results['report'] = report
+        if report_gen:
+            try:
+                report = report_gen.generate_structured_report(image, results, patient_info)
+                results['report'] = report
+            except Exception as e:
+                st.warning(f"Error generating report: {e}")
+                results['report'] = "Report generation failed. Please review findings manually."
+        else:
+            results['report'] = "Report generator not available. Please review findings manually."
         
         if patient_info:
             results['patient_info'] = patient_info
@@ -244,7 +236,7 @@ def analyze_xray(image, preprocessor, segmenter, classifier, measurements, repor
 
 
 def display_results(image, results):
-    """Display analysis results with all tabs including pulmonary"""
+    """Display analysis results - keeping existing implementation"""
     
     # Create tabs
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
@@ -252,7 +244,7 @@ def display_results(image, results):
         "🖼️ Visualizations",
         "🔧 Technical", 
         "🫁 Anatomy", 
-        "🫀 Pulmonary Patterns",  # NEW TAB
+        "🫀 Pulmonary Patterns",
         "⚕️ Findings"
     ])
     
@@ -287,16 +279,6 @@ def display_results(image, results):
         - 🔷 Light Blue (dashed): Major fissures
         - 🟣 Purple (dashed): Minor fissure
         """)
-        
-        import io
-        buf = io.BytesIO()
-        viz_image.save(buf, format='PNG')
-        st.download_button(
-            label="Download Annotated Image",
-            data=buf.getvalue(),
-            file_name="xray_annotated.png",
-            mime="image/png"
-        )
     
     with tab3:
         st.subheader("Technical Considerations")
@@ -308,48 +290,30 @@ def display_results(image, results):
             view = results['view_classification']
             st.info(f"**View:** {view['view']}")
             st.caption(f"Confidence: {view['confidence']:.2%}")
-            st.caption(view['note'])
             
             if 'patient_age' in results:
                 st.markdown("#### Patient Information")
                 st.metric("Estimated Age", f"{results['patient_age']:.0f} years")
-                gender = "Female" if results['patient_female_prob'] >= 0.5 else "Male"
-                gender_conf = results['patient_female_prob'] if results['patient_female_prob'] >= 0.5 else 1 - results['patient_female_prob']
-                st.caption(f"Predicted Sex: {gender} ({gender_conf:.1%} confidence)")
             
             st.markdown("#### Rotation")
             rotation = results.get('rotation', {})
-            rotation_assessment = rotation.get('assessment', "Rotation assessment unavailable")
             if rotation.get('symmetric', False):
-                st.success(rotation_assessment)
+                st.success(rotation.get('assessment', 'Normal'))
             else:
-                st.warning(rotation_assessment)
+                st.warning(rotation.get('assessment', 'Check rotation'))
             
         with col2:
             st.markdown("#### Inspiration")
             insp = results.get('inspiration', {})
             rib_count = insp.get('count', 0)
             st.metric("Posterior Ribs Visible", rib_count)
-            insp_assessment = insp.get('assessment', "Inspiration assessment unavailable")
-            if rib_count >= 9:
-                st.success(insp_assessment)
-            elif rib_count >= 7:
-                st.warning(insp_assessment)
-            else:
-                st.error(insp_assessment)
             
             st.markdown("#### Penetration")
             pen = results.get('penetration', {})
-            pen_assessment = pen.get('assessment', "Penetration assessment unavailable")
             if pen.get('adequate', False):
-                st.success(pen_assessment)
+                st.success(pen.get('assessment', 'Adequate'))
             else:
-                st.warning(pen_assessment)
-            
-            if results.get('segmentation_method') == 'ml_model':
-                st.success("✓ Using ML-based segmentation")
-            else:
-                st.info("ℹ Using traditional segmentation")
+                st.warning(pen.get('assessment', 'Check penetration'))
     
     with tab4:
         st.subheader("Anatomical Assessment")
@@ -359,216 +323,87 @@ def display_results(image, results):
         with col1:
             st.markdown("#### Airway")
             trachea = results.get('trachea', {})
-            trachea_assessment = trachea.get('assessment', "Airway assessment unavailable")
             if trachea.get('midline', True):
-                st.success(trachea_assessment)
+                st.success(trachea.get('assessment', 'Midline'))
             else:
-                st.warning(trachea_assessment)
-            
-            st.markdown("#### Mediastinum")
-            st.info("Automated assessment: No abnormal widening detected")
+                st.warning(trachea.get('assessment', 'Deviated'))
         
         with col2:
             st.markdown("#### Cardiac Silhouette")
             ctr = results.get('ctr', {})
             if ctr:
                 ctr_value = ctr.get('ctr', 0.0)
-                st.metric("Cardiothoracic Ratio", f"{ctr_value:.3f}")
-                ctr_assessment = ctr.get('assessment', "CTR assessment unavailable")
+                st.metric("CTR", f"{ctr_value:.3f}")
+                
                 if ctr_value < 0.5:
-                    st.success(ctr_assessment)
-                elif ctr_value < 0.55:
-                    st.warning(ctr_assessment)
+                    st.success(ctr.get('assessment', 'Normal'))
                 else:
-                    st.error(ctr_assessment)
-            else:
-                st.info("CTR calculation unavailable")
-            
-            st.markdown("#### Pleura")
-            angles = results.get('costophrenic_angles', {})
-            angles_assessment = angles.get('assessment', "Pleural angles assessment unavailable")
-            
-            if angles.get('angles'):
-                col1, col2 = st.columns(2)
-                with col1:
-                    left_angle = next((angle['angle'] for angle in angles['angles'] if angle['side'] == 'left'), None)
-                    if left_angle is not None:
-                        st.metric("Left CP Angle", f"{left_angle:.1f}°")
-                with col2:
-                    right_angle = next((angle['angle'] for angle in angles['angles'] if angle['side'] == 'right'), None)
-                    if right_angle is not None:
-                        st.metric("Right CP Angle", f"{right_angle:.1f}°")
-            
-            if angles.get('sharp', True):
-                st.success(angles_assessment)
-            else:
-                st.warning(angles_assessment)
+                    st.warning(ctr.get('assessment', 'Enlarged'))
     
-    # NEW PULMONARY PATTERNS TAB
-    with tab5:  # Pulmonary Patterns tab
+    with tab5:
         st.subheader("Pulmonary Pattern Analysis")
         
-        # Debug: Show what's in results
-        st.write("**Debug Info:**")
-        st.write(f"Has edema_pattern: {'edema_pattern' in results}")
-        st.write(f"Has fissures: {'fissures' in results}")
-        
-        if 'edema_pattern' in results:
-            st.write(f"Edema pattern type: {results['edema_pattern']}")
-        if 'fissures' in results:
-            st.write(f"Fissures data: {results['fissures']}")
-        
-        st.divider()
-        
-        # Edema Pattern Section
-        if 'edema_pattern' in results and results['edema_pattern'] is not None:
+        if 'edema_pattern' in results and results['edema_pattern']:
             pattern = results['edema_pattern']
-            
-            st.markdown("#### Pulmonary Edema Assessment")
             
             col1, col2 = st.columns(2)
             
             with col1:
+                st.markdown("#### Edema Assessment")
                 pattern_type = pattern.get('pattern_type', 'unknown')
                 confidence = pattern.get('confidence', 0)
                 
-                st.write(f"**Pattern Type:** {pattern_type}")
+                st.write(f"**Pattern:** {pattern_type}")
                 st.write(f"**Confidence:** {confidence:.0%}")
                 
-                if pattern_type == 'no_edema':
-                    st.success("✓ No significant pulmonary edema detected")
-                elif pattern_type == 'cardiogenic':
-                    st.warning(f"⚠️ Cardiogenic pattern suggested (Confidence: {confidence:.0%})")
-                elif pattern_type == 'indeterminate':
-                    st.info(f"ℹ️ Indeterminate pattern (Confidence: {confidence:.0%})")
-                else:
-                    st.info(f"Pattern: {pattern_type} (Confidence: {confidence:.0%})")
-                
-                # Display supporting features
-                supporting_features = pattern.get('supporting_features', [])
-                if supporting_features:
-                    st.markdown("**Supporting Features:**")
-                    for feature in supporting_features:
-                        st.markdown(f"- {feature}")
-                else:
-                    st.info("No supporting features detected")
+                features = pattern.get('supporting_features', [])
+                if features:
+                    st.markdown("**Features:**")
+                    for f in features:
+                        st.markdown(f"- {f}")
             
             with col2:
-                # Kerley Lines
                 kerley = pattern.get('kerley_lines')
                 if kerley:
                     st.markdown("#### Interstitial Markings")
-                    
-                    b_detected = kerley.get('b_lines_detected', False)
-                    a_detected = kerley.get('a_lines_detected', False)
-                    
-                    if b_detected or a_detected:
-                        interpretation = kerley.get('interpretation', 'No interpretation available')
-                        st.write(interpretation)
-                        
-                        if b_detected:
-                            b_count = kerley.get('b_line_count', 0)
-                            st.metric("Short peripheral lines", b_count)
-                        
-                        if a_detected:
-                            a_count = kerley.get('a_line_count', 0)
-                            st.metric("Longer oblique lines", a_count)
-                        
-                        kerley_conf = kerley.get('confidence', 0)
-                        st.caption(f"Detection confidence: {kerley_conf:.0%}")
-                    else:
-                        st.info("No significant interstitial markings detected")
-                else:
-                    st.info("Kerley line analysis not available")
-        else:
-            st.warning("⚠️ Pulmonary edema pattern analysis not available")
-            st.info("This could be due to an error during analysis. Check the console for details.")
+                    st.write(kerley.get('interpretation', 'None detected'))
         
-        st.divider()
-        
-        # Fissure Section
-        if 'fissures' in results and results['fissures'] is not None:
+        if 'fissures' in results and results['fissures']:
+            st.divider()
+            st.markdown("#### Pulmonary Fissures")
+            
             fissures = results['fissures']
+            major = fissures.get('major_fissures', [])
+            minor = fissures.get('minor_fissure')
             
-            st.markdown("#### Pulmonary Fissures (Anatomical)")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("**Major Fissures (Oblique)**")
-                major_fissures = fissures.get('major_fissures', [])
-                
-                if major_fissures:
-                    for fissure in major_fissures:
-                        side = fissure.get('side', 'unknown').capitalize()
-                        conf = fissure.get('confidence', 0)
-                        
-                        if conf > 0.3:
-                            st.success(f"✓ {side} lung: Detected ({conf:.0%} confidence)")
-                        else:
-                            st.info(f"ℹ️ {side} lung: Low confidence ({conf:.0%})")
-                else:
-                    st.info("Not clearly visualized")
-            
-            with col2:
-                st.markdown("**Minor Fissure (Horizontal)**")
-                minor_fissure = fissures.get('minor_fissure')
-                
-                if minor_fissure:
-                    conf = minor_fissure.get('confidence', 0)
-                    if conf > 0.3:
-                        st.success(f"✓ Right lung: Detected ({conf:.0%} confidence)")
-                    else:
-                        st.info(f"ℹ️ Low confidence detection ({conf:.0%})")
-                else:
-                    st.info("Not visualized (right lung)")
-        else:
-            st.warning("⚠️ Fissure analysis not available")
+            if major or minor:
+                st.success(f"✓ {len(major)} major fissure(s) detected")
+                if minor:
+                    st.success("✓ Minor fissure detected")
     
     with tab6:
         st.subheader("Abnormality Detection")
         
         sig_findings = results.get('significant_findings', {})
         
-        if sig_findings and isinstance(sig_findings, dict):
-            try:
-                sorted_findings = sorted(
-                    [(k, float(v)) for k, v in sig_findings.items() if isinstance(v, (float, int))],
-                    key=lambda x: x[1],
-                    reverse=True
-                )
-                
-                st.warning(f"⚠️ {len(sorted_findings)} significant finding(s) detected")
-                
-                for pathology, score in sorted_findings:
-                    col1, col2 = st.columns([3, 1])
-                    with col1:
-                        st.write(f"**{pathology}**")
-                    with col2:
+        if sig_findings:
+            st.warning(f"⚠️ {len(sig_findings)} significant finding(s)")
+            
+            for pathology, score in sig_findings.items():
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.write(f"**{pathology}**")
+                with col2:
+                    if isinstance(score, (float, int)):
                         st.write(f"{score:.1%}")
-                    st.progress(score)
-            except (ValueError, TypeError) as e:
-                st.error("Error displaying findings - data format issue")
+                        st.progress(float(score))
         else:
-            st.success("✓ No significant abnormalities detected by automated analysis")
-        
-        with st.expander("View All Detection Scores"):
-            abnormalities = results.get('abnormalities', {})
-            try:
-                sorted_abnormalities = sorted(
-                    [(k, float(v)) for k, v in abnormalities.items() if isinstance(v, (float, int))],
-                    key=lambda x: x[1],
-                    reverse=True
-                )
-                
-                for pathology, score in sorted_abnormalities:
-                    st.write(f"{pathology}: {score:.1%}")
-            except (ValueError, TypeError) as e:
-                st.error("Error displaying abnormalities - data format issue")
+            st.success("✓ No significant abnormalities detected")
+
 
 def main():
     st.title("🫁 AI Chest X-Ray Analyzer")
-    st.markdown("Comprehensive automated analysis of chest X-rays with structured reporting")
+    st.markdown("Comprehensive automated analysis of chest X-rays")
     
     with st.sidebar:
         st.header("About")
@@ -578,38 +413,62 @@ def main():
         - Technical quality assessment
         - Anatomical segmentation
         - Abnormality detection
-        - Measurement calculations
+        - Pulmonary pattern analysis
         - Structured report generation
         
-        **Note:** This is an AI-assisted tool. All findings should be verified by a qualified radiologist.
+        **Note:** AI-assisted tool. All findings should be verified by a qualified radiologist.
         """)
         
-        st.header("Settings")
+        st.header("System Status")
         if torch.cuda.is_available():
-            st.success(f"✓ GPU Available: {torch.cuda.get_device_name(0)}")
+            st.success(f"✓ GPU: {torch.cuda.get_device_name(0)}")
         else:
             st.info("Running on CPU")
+    
+    # Load models with explicit button or auto-load
+    if not st.session_state.get('models_loaded', False):
+        st.warning("⚠️ Models not yet loaded. Click below to initialize.")
         
-        groq_available = bool(os.getenv('GROQ_API_KEY'))
-        if groq_available:
-            st.success("✓ Groq API Connected")
-        else:
-            st.warning("⚠️ Groq API not configured\nUsing template reports")
+        if st.button("🚀 Initialize AI Models", type="primary", use_container_width=True):
+            try:
+                with st.spinner("Initializing AI models... This may take 1-2 minutes on first run."):
+                    preprocessor, segmenter, classifier, measurements, report_gen, status = load_models()
+                    
+                    # Store in session state
+                    st.session_state.preprocessor = preprocessor
+                    st.session_state.segmenter = segmenter
+                    st.session_state.classifier = classifier
+                    st.session_state.measurements = measurements
+                    st.session_state.report_gen = report_gen
+                    st.session_state.model_status = status
+                    st.session_state.models_loaded = True
+                    
+                    st.success("✓ Models loaded successfully!")
+                    st.rerun()
+                    
+            except Exception as e:
+                st.error(f"❌ Failed to load models: {e}")
+                st.error("Please refresh the page and try again.")
+                st.stop()
+        
+        st.stop()  # Don't show upload until models are loaded
     
-    # Load models with better error handling
-    try:
-        with st.spinner("Loading AI models... This may take 1-2 minutes on first run."):
-            preprocessor, segmenter, classifier, measurements, report_gen = load_models()
-    except Exception as e:
-        st.error(f"❌ Critical error loading models: {e}")
-        st.error("Cannot proceed without view classifier. Please refresh the page or contact support.")
-        st.stop()  # Stop the app
-        return
+    # Show model status
+    with st.sidebar:
+        st.header("Model Status")
+        status = st.session_state.get('model_status', {})
+        if status.get('view_classifier'):
+            st.success("✓ View Classifier")
+        if status.get('abnormality_detector'):
+            st.success("✓ Abnormality Detector")
+        if status.get('report_generator'):
+            st.success("✓ Report Generator")
     
+    # File upload
     uploaded_file = st.file_uploader(
         "Upload Chest X-Ray Image", 
         type=['png', 'jpg', 'jpeg', 'dcm'],
-        help="Upload a chest X-ray image in PNG, JPG, or DICOM format"
+        help="Upload a chest X-ray image"
     )
     
     if uploaded_file is not None:
@@ -621,49 +480,55 @@ def main():
                 st.image(image, caption="Uploaded X-Ray", use_container_width=True)
             
             st.divider()
+            
+            # Patient info
             st.subheader("Patient Information")
             col1, col2 = st.columns(2)
             with col1:
-                name = st.text_input("Patient Name", help="Enter patient's full name")
-                mrn = st.text_input("Medical Record Number (MRN)", help="Enter patient's MRN")
-                dob = st.text_input("Date of Birth", help="Format: YYYY-MM-DD")
+                name = st.text_input("Name", help="Patient's full name")
+                mrn = st.text_input("MRN", help="Medical Record Number")
+                dob = st.text_input("DOB", help="YYYY-MM-DD")
             with col2:
-                referring_physician = st.text_input("Referring Physician", help="Enter referring doctor's name")
-                gender = st.radio("Gender", ["Male", "Female", "Other"], help="Select patient's gender")
-                history = st.text_area("Clinical History", help="Enter relevant clinical history", height=100)
+                referring = st.text_input("Referring Physician")
+                gender = st.radio("Gender", ["Male", "Female", "Other"])
+                history = st.text_area("Clinical History", height=100)
             
             st.divider()
             
             if st.button("🔍 Analyze X-Ray", type="primary", use_container_width=True):
                 patient_info = {
-                    'name': name if name else 'ANONYMOUS',
-                    'mrn': mrn if mrn else 'NOT PROVIDED',
-                    'dob': dob if dob else 'NOT PROVIDED',
+                    'name': name or 'ANONYMOUS',
+                    'mrn': mrn or 'NOT PROVIDED',
+                    'dob': dob or 'NOT PROVIDED',
                     'gender': gender,
-                    'referring_physician': referring_physician if referring_physician else 'NOT PROVIDED',
-                    'history': history if history else 'Routine chest examination',
+                    'referring_physician': referring or 'NOT PROVIDED',
+                    'history': history or 'Routine examination',
                     'exam_date': 'CURRENT'
                 }
+                
                 try:
                     results = analyze_xray(
                         image, 
-                        preprocessor, 
-                        segmenter, 
-                        classifier, 
-                        measurements, 
-                        report_gen,
+                        st.session_state.preprocessor,
+                        st.session_state.segmenter,
+                        st.session_state.classifier,
+                        st.session_state.measurements,
+                        st.session_state.report_gen,
                         patient_info
                     )
+                    
                     st.session_state.results = results
                     st.session_state.image = image
                     st.session_state.analysis_done = True
+                    
                     st.success("✓ Analysis complete!")
                     st.rerun()
                     
                 except Exception as e:
                     st.error(f"Error during analysis: {e}")
                     import traceback
-                    st.code(traceback.format_exc())
+                    with st.expander("View error details"):
+                        st.code(traceback.format_exc())
             
             if st.session_state.analysis_done and st.session_state.results:
                 st.divider()
@@ -674,6 +539,7 @@ def main():
     
     else:
         st.info("👆 Please upload a chest X-ray image to begin analysis")
+
 
 if __name__ == "__main__":
     main()

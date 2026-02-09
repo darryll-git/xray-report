@@ -1,5 +1,3 @@
-#models/classification.py
-
 import torch
 from transformers import AutoModel
 import torchxrayvision as xrv
@@ -12,37 +10,66 @@ class XRayClassifier:
         self.view_classifier = None
         self.abnormality_model = None
         self.torchxrv_model = None
-
-        self.load_view_classifier()
+        
+        # Don't auto-load in __init__ - let the app control this
         
     def load_view_classifier(self):
         """Load AP/PA view classifier - uses custom model with segmentation"""
+        if self.view_classifier is not None:
+            print("View classifier already loaded")
+            return True
+            
         try:
+            import os
+            print(f"Loading view classifier from HuggingFace...")
+            print(f"Using device: {self.device}")
+            
             model_name = "ianpan/chest-x-ray-basic"
+            
+            # Try to load with explicit error handling
             self.view_classifier = AutoModel.from_pretrained(
                 model_name,
-                trust_remote_code=True
+                trust_remote_code=True,
+                cache_dir=os.getenv('TRANSFORMERS_CACHE', None)  # Use default cache
             )
+            
             self.view_classifier.to(self.device)
             self.view_classifier.eval()
+            
             # Store mapping for view predictions
             self.view_mapping = {0: 'AP', 1: 'PA', 2: 'LATERAL'}
-            print("View classifier (with segmentation) loaded successfully")
+            
+            print("✓ View classifier loaded successfully")
+            return True
+            
         except Exception as e:
-            print(f"Error loading view classifier: {e}")
+            print(f"❌ Error loading view classifier: {e}")
+            print(f"Error type: {type(e).__name__}")
+            
+            # Print more detailed error info
+            import traceback
+            print("Detailed traceback:")
+            print(traceback.format_exc())
+            
             self.view_classifier = None
+            
+            # Re-raise the exception so the app can handle it
+            raise RuntimeError(f"Failed to load view classifier: {e}") from e
     
     def load_abnormality_detector(self):
         """Load abnormality detection model"""
         try:
+            print("Loading abnormality detector (TorchXRayVision)...")
             # Using torchxrayvision for multi-label classification
             self.torchxrv_model = xrv.models.DenseNet(weights="densenet121-res224-all")
             self.torchxrv_model.to(self.device)
             self.torchxrv_model.eval()
-            print("Abnormality detector loaded successfully")
+            print("✓ Abnormality detector loaded successfully")
+            return True
         except Exception as e:
-            print(f"Error loading abnormality detector: {e}")
+            print(f"❌ Error loading abnormality detector: {e}")
             self.torchxrv_model = None
+            return False
     
     def classify_view(self, image, preprocessed_tensor=None):
         """Classify if AP or PA view.
