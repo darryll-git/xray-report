@@ -53,6 +53,17 @@ def load_models():
         classifier = XRayClassifier(device=device)
         measurements = XRayMeasurements()
         
+
+        with st.spinner("Loading view classifier..."):
+            try:
+                classifier.load_view_classifier()
+                st.success("✓ View classifier loaded")
+            except Exception as e:
+                st.error(f"❌ Failed to load view classifier: {e}")
+                st.error("Please check your internet connection and try again.")
+                raise  # Stop execution if view classifier fails
+
+
         # Load classification models
         try:
             classifier.load_abnormality_detector()
@@ -585,12 +596,15 @@ def main():
         else:
             st.warning("⚠️ Groq API not configured\nUsing template reports")
     
+    # Load models with better error handling
     try:
-        preprocessor, segmenter, classifier, measurements, report_gen = load_models()
-        st.success("✓ Models loaded successfully")
+        with st.spinner("Loading AI models... This may take 1-2 minutes on first run."):
+            preprocessor, segmenter, classifier, measurements, report_gen = load_models()
     except Exception as e:
-        st.error(f"Error loading models: {e}")
-        st.stop()
+        st.error(f"❌ Critical error loading models: {e}")
+        st.error("Cannot proceed without view classifier. Please refresh the page or contact support.")
+        st.stop()  # Stop the app
+        return
     
     uploaded_file = st.file_uploader(
         "Upload Chest X-Ray Image", 
