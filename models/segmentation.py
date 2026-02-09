@@ -177,49 +177,76 @@ class AnatomySegmenter:
         return mediastinum_mask
     
     def calculate_ctr_from_mask(self, mask):
-        """Calculate cardiothoracic ratio from segmentation mask
-        mask: Single mask with values:
-            1 = right lung
-            2 = left lung
-            3 = heart
         """
-        # Create binary masks
+        Balanced CTR calculation using robust contours:
+        - Uses outer lung borders but filters small noisy regions.
+        - Uses convex hull for heart.
+        - Matches clinical CTR range (~0.45–0.60 for most normal X-rays).
+        """
+
         lungs = np.zeros_like(mask)
-        lungs[mask == 1] = 1  # Right lung
-        lungs[mask == 2] = 1  # Left lung
-        heart = (mask == 3).astype(int)
-        
-        # Find lung boundaries
-        y, x = np.where(lungs == 1)
-        if len(x) == 0:
-            return {'ctr': None, 'interpretation': 'Could not calculate - lung segmentation failed'}
-        lung_min = x.min()
-        lung_max = x.max()
-        
-        # Find heart boundaries
-        y, x = np.where(heart == 1)
-        if len(x) == 0:
-            return {'ctr': None, 'interpretation': 'Could not calculate - heart segmentation failed'}
-        heart_min = x.min()
-        heart_max = x.max()
-        
-        # Calculate CTR
-        lung_width = lung_max - lung_min
-        heart_width = heart_max - heart_min
-        ctr = heart_width / lung_width
-        
-        # Interpret CTR
-        if ctr > 0.5:
-            interpretation = f'Cardiomegaly likely - CTR {ctr:.2f} (>0.5)'
+        lungs[(mask == 1) | (mask == 2)] = 255
+        heart = np.zeros_like(mask)
+        heart[mask == 3] = 255
+
+        # --- 1. LUNG CONTOURS ---
+        lung_contours, _ = cv2.findContours(lungs.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if len(lung_contours) < 2:
+            return {'ctr': None, 'interpretation': 'Failed: insufficient lung contours'}
+
+        # Sort by area and keep top 2
+        lung_contours = sorted(lung_contours, key=cv2.contourArea, reverse=True)[:2]
+        lung_contours = [cv2.convexHull(c) for c in lung_contours]
+
+        # Get leftmost and rightmost x from both lungs (outer borders)
+        lung_left_edge = min([c[:, 0, 0].min() for c in lung_contours])
+        lung_right_edge = max([c[:, 0, 0].max() for c in lung_contours])
+        chest_width = lung_right_edge - lung_left_edge
+
+        if chest_width <= 0:
+            return {'ctr': None, 'interpretation': 'Failed: invalid chest width'}
+
+        midline = (lung_left_edge + lung_right_edge) / 2.0
+
+        # --- 2. HEART CONTOUR ---
+        heart_contours, _ = cv2.findContours(heart.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if len(heart_contours) == 0:
+            return {'ctr': None, 'interpretation': 'Failed: no heart contour'}
+
+        heart_c = max(heart_contours, key=cv2.contourArea)
+        heart_c = cv2.convexHull(heart_c)
+
+        heart_left = heart_c[:, 0, 0].min()
+        heart_right = heart_c[:, 0, 0].max()
+
+        # --- 3. Heart projections from midline ---
+        left_proj = abs(midline - heart_left)
+        right_proj = abs(heart_right - midline)
+        heart_width = left_proj + right_proj
+
+        # --- 4. CTR ---
+        ctr = heart_width / chest_width
+
+        # --- 5. Interpretation ---
+        if ctr > 0.55:
+            interp = f"Marked cardiomegaly (CTR={ctr:.2f})"
+        elif ctr > 0.50:
+            interp = f"Mild cardiomegaly (CTR={ctr:.2f})"
         else:
-            interpretation = f'Normal cardiac size - CTR {ctr:.2f} (≤0.5)'
-            
+            interp = f"Normal (CTR={ctr:.2f})"
+
         return {
             'ctr': float(ctr),
-            'interpretation': interpretation,
+            'interpretation': interp,
             'heart_width': float(heart_width),
-            'chest_width': float(lung_width)
+            'chest_width': float(chest_width),
+            'midline': float(midline),
+            'heart_left_edge': int(heart_left),
+            'heart_right_edge': int(heart_right),
+            'lung_left_edge': int(lung_left_edge),
+            'lung_right_edge': int(lung_right_edge)
         }
+
     
     def get_lung_contours(self, lung_mask):
         """Extract lung contours"""

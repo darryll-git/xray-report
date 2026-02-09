@@ -1,3 +1,5 @@
+#app.py
+
 import streamlit as st
 import torch
 from PIL import Image
@@ -19,6 +21,9 @@ from models.segmentation import AnatomySegmenter
 from models.classification import XRayClassifier
 from models.measurements import XRayMeasurements
 from models.report_generator import ReportGenerator
+
+from models.pulmonary_analysis import PulmonaryEdemaAnalyzer, LungFissureDetector
+from utils.visualization import create_enhanced_visualization
 
 # Load environment variables
 load_dotenv()
@@ -65,70 +70,72 @@ def load_models():
         
         return preprocessor, segmenter, classifier, measurements, report_gen
 
+# def create_visualization(image, results):
+#     """Create visualization overlays"""
+#     img_array = np.array(image.convert('RGB'))
+#     masks = results['masks']
+    
+#     # Create segmentation overlay
+#     segmented_img = img_array.copy()
+    
+#     # Overlay lungs in blue
+#     lung_colored = np.zeros_like(img_array)
+#     lung_colored[masks['lungs'] > 0] = [0, 0, 255]
+#     segmented_img = np.where(lung_colored > 0, 
+#                              (segmented_img * 0.6 + lung_colored * 0.4).astype(np.uint8),
+#                              segmented_img)
+    
+#     # Overlay heart in red
+#     heart_colored = np.zeros_like(img_array)
+#     heart_colored[masks['heart'] > 0] = [255, 0, 0]
+#     segmented_img = np.where(heart_colored > 0,
+#                             (segmented_img * 0.6 + heart_colored * 0.4).astype(np.uint8),
+#                             segmented_img)
+    
+#     # Draw rib markers if available
+#     if 'inspiration' in results and 'positions' in results['inspiration']:
+#         for i, pos in enumerate(results['inspiration']['positions']):
+#             # Draw circle
+#             cv2.circle(segmented_img, (int(pos[0]), int(pos[1])), 5, (0, 255, 255), -1)
+#             # Draw label
+#             cv2.putText(segmented_img, f'R{i+1}', 
+#                        (int(pos[0])+10, int(pos[1])),
+#                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+    
+#     # Draw costophrenic angle markers
+#     if 'costophrenic_angles' in results and 'angles' in results['costophrenic_angles']:
+#         for angle_data in results['costophrenic_angles']['angles']:
+#             pos = angle_data['position']
+#             color = (0, 255, 0) if angle_data['sharp'] else (255, 165, 0)
+#             cv2.circle(segmented_img, pos, 8, color, 2)
+#             # Label with angle if available
+#             if angle_data.get('angle'):
+#                 label = f"{angle_data['angle']:.0f}°"
+#                 cv2.putText(segmented_img, label,
+#                            (pos[0]+15, pos[1]),
+#                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+    
+#     return Image.fromarray(segmented_img)
+
+
 def create_visualization(image, results):
-    """Create visualization overlays"""
-    img_array = np.array(image.convert('RGB'))
-    masks = results['masks']
-    
-    # Create segmentation overlay
-    segmented_img = img_array.copy()
-    
-    # Overlay lungs in blue
-    lung_colored = np.zeros_like(img_array)
-    lung_colored[masks['lungs'] > 0] = [0, 0, 255]
-    segmented_img = np.where(lung_colored > 0, 
-                             (segmented_img * 0.6 + lung_colored * 0.4).astype(np.uint8),
-                             segmented_img)
-    
-    # Overlay heart in red
-    heart_colored = np.zeros_like(img_array)
-    heart_colored[masks['heart'] > 0] = [255, 0, 0]
-    segmented_img = np.where(heart_colored > 0,
-                            (segmented_img * 0.6 + heart_colored * 0.4).astype(np.uint8),
-                            segmented_img)
-    
-    # Draw rib markers if available
-    if 'inspiration' in results and 'positions' in results['inspiration']:
-        for i, pos in enumerate(results['inspiration']['positions']):
-            # Draw circle
-            cv2.circle(segmented_img, (int(pos[0]), int(pos[1])), 5, (0, 255, 255), -1)
-            # Draw label
-            cv2.putText(segmented_img, f'R{i+1}', 
-                       (int(pos[0])+10, int(pos[1])),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-    
-    # Draw costophrenic angle markers
-    if 'costophrenic_angles' in results and 'angles' in results['costophrenic_angles']:
-        for angle_data in results['costophrenic_angles']['angles']:
-            pos = angle_data['position']
-            color = (0, 255, 0) if angle_data['sharp'] else (255, 165, 0)
-            cv2.circle(segmented_img, pos, 8, color, 2)
-            # Label with angle if available
-            if angle_data.get('angle'):
-                label = f"{angle_data['angle']:.0f}°"
-                cv2.putText(segmented_img, label,
-                           (pos[0]+15, pos[1]),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-    
-    return Image.fromarray(segmented_img)
+    """Use the new enhanced visualization"""
+    return create_enhanced_visualization(image, results)
 
 def analyze_xray(image, preprocessor, segmenter, classifier, measurements, report_gen, patient_info=None):
-    """Complete X-ray analysis pipeline with optional patient information"""
+    """Complete X-ray analysis pipeline with pulmonary analysis"""
     
     results = {}
     
     # Convert to numpy for processing
     img_array = np.array(image.convert('L'))
     
-    with st.spinner("Step 1/6: Preprocessing image..."):
-        # Enhance image
+    with st.spinner("Step 1/7: Preprocessing image..."):
         enhanced_img = preprocessor.enhance_contrast(image)
-        
-        # Prepare tensors for torchxrayvision
         tensor_xrv = preprocessor.preprocess_for_torchxrayvision(enhanced_img)
         view_result = classifier.classify_view(image, tensor_xrv)
     
-    with st.spinner("Step 2/6: Classifying view and getting segmentation..."):
+    with st.spinner("Step 2/7: Classifying view and segmentation..."):
         results['view_classification'] = view_result
         ml_mask = view_result.get('mask', None)
 
@@ -141,23 +148,47 @@ def analyze_xray(image, preprocessor, segmenter, classifier, measurements, repor
         rotation_result['symmetric'] = rotation_result.get('symmetric', False)
         results['rotation'] = rotation_result
     
-    with st.spinner("Step 3/6: Segmenting anatomical structures..."):
+    with st.spinner("Step 3/7: Segmenting anatomical structures..."):
         masks = segmenter.segment_all(enhanced_img, use_ml_model=True, ml_masks=ml_mask)
         results['masks'] = masks
         results['segmentation_method'] = masks.get('method', 'unknown')
     
-    with st.spinner("Step 4/6: Detecting abnormalities..."):
+    with st.spinner("Step 4/7: Detecting abnormalities..."):
         abnormality_results = classifier.detect_abnormalities(tensor_xrv)
-        
-        # Store the raw findings (float scores 0-1)
         findings = abnormality_results.get('findings', {})
-        results['abnormalities'] = findings  # Raw scores for expander display
-        
-        # Store significant findings
-        significant = abnormality_results.get('significant', {})
-        results['significant_findings'] = significant
+        results['abnormalities'] = findings
+        results['significant_findings'] = abnormality_results.get('significant', {})
     
-    with st.spinner("Step 5/6: Measuring technical parameters..."):
+    # PULMONARY ANALYSIS - NEW
+    with st.spinner("Step 5/7: Analyzing pulmonary patterns (edema & fissures)..."):
+        try:
+            from models.pulmonary_analysis import PulmonaryEdemaAnalyzer, LungFissureDetector
+            
+            edema_analyzer = PulmonaryEdemaAnalyzer()
+            fissure_detector = LungFissureDetector()
+            
+            img_gray = np.array(image.convert('L'))
+            
+            # Edema pattern analysis
+            edema_pattern = edema_analyzer.analyze_edema_pattern(
+                img_gray, 
+                masks['lungs'],
+                findings
+            )
+            results['edema_pattern'] = edema_pattern
+            
+            # Fissure detection
+            fissures = fissure_detector.detect_fissures(img_gray, masks['lungs'])
+            results['fissures'] = fissures
+            
+        except Exception as e:
+            st.error(f"Error in pulmonary analysis: {e}")
+            import traceback
+            st.code(traceback.format_exc())
+            results['edema_pattern'] = None
+            results['fissures'] = None
+    
+    with st.spinner("Step 6/7: Measuring technical parameters..."):
         rib_result = measurements.count_posterior_ribs(img_array, masks['lungs'])
         results['inspiration'] = rib_result
         
@@ -167,7 +198,7 @@ def analyze_xray(image, preprocessor, segmenter, classifier, measurements, repor
         trachea_result = measurements.check_trachea_position(img_array)
         results['trachea'] = trachea_result
     
-    with st.spinner("Step 6/6: Calculating measurements and generating report..."):
+    with st.spinner("Step 7/7: Calculating CTR and generating report..."):
         if ml_mask is not None:
             ctr_result = segmenter.calculate_ctr_from_mask(ml_mask)
         else:
@@ -200,15 +231,17 @@ def analyze_xray(image, preprocessor, segmenter, classifier, measurements, repor
     
     return results
 
+
 def display_results(image, results):
-    """Display analysis results with visualizations"""
+    """Display analysis results with all tabs including pulmonary"""
     
     # Create tabs
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📋 Report", 
         "🖼️ Visualizations",
         "🔧 Technical", 
         "🫁 Anatomy", 
+        "🫀 Pulmonary Patterns",  # NEW TAB
         "⚕️ Findings"
     ])
     
@@ -225,7 +258,6 @@ def display_results(image, results):
     with tab2:
         st.subheader("Anatomical Segmentation & Measurements")
         
-        # Generate visualization
         viz_image = create_visualization(image, results)
         
         col1, col2 = st.columns(2)
@@ -234,7 +266,6 @@ def display_results(image, results):
         with col2:
             st.image(viz_image, caption="Annotated Analysis", use_container_width=True)
         
-        # Legend
         st.markdown("""
         **Color Legend:**
         - 🔵 Blue: Lung fields
@@ -242,9 +273,10 @@ def display_results(image, results):
         - 🟡 Yellow: Posterior ribs (numbered)
         - 🟢 Green: Sharp costophrenic angles
         - 🟠 Orange: Blunted costophrenic angles
+        - 🔷 Light Blue (dashed): Major fissures
+        - 🟣 Purple (dashed): Minor fissure
         """)
         
-        # Download visualization
         import io
         buf = io.BytesIO()
         viz_image.save(buf, format='PNG')
@@ -361,7 +393,128 @@ def display_results(image, results):
             else:
                 st.warning(angles_assessment)
     
-    with tab5:
+    # NEW PULMONARY PATTERNS TAB
+    with tab5:  # Pulmonary Patterns tab
+        st.subheader("Pulmonary Pattern Analysis")
+        
+        # Debug: Show what's in results
+        st.write("**Debug Info:**")
+        st.write(f"Has edema_pattern: {'edema_pattern' in results}")
+        st.write(f"Has fissures: {'fissures' in results}")
+        
+        if 'edema_pattern' in results:
+            st.write(f"Edema pattern type: {results['edema_pattern']}")
+        if 'fissures' in results:
+            st.write(f"Fissures data: {results['fissures']}")
+        
+        st.divider()
+        
+        # Edema Pattern Section
+        if 'edema_pattern' in results and results['edema_pattern'] is not None:
+            pattern = results['edema_pattern']
+            
+            st.markdown("#### Pulmonary Edema Assessment")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                pattern_type = pattern.get('pattern_type', 'unknown')
+                confidence = pattern.get('confidence', 0)
+                
+                st.write(f"**Pattern Type:** {pattern_type}")
+                st.write(f"**Confidence:** {confidence:.0%}")
+                
+                if pattern_type == 'no_edema':
+                    st.success("✓ No significant pulmonary edema detected")
+                elif pattern_type == 'cardiogenic':
+                    st.warning(f"⚠️ Cardiogenic pattern suggested (Confidence: {confidence:.0%})")
+                elif pattern_type == 'indeterminate':
+                    st.info(f"ℹ️ Indeterminate pattern (Confidence: {confidence:.0%})")
+                else:
+                    st.info(f"Pattern: {pattern_type} (Confidence: {confidence:.0%})")
+                
+                # Display supporting features
+                supporting_features = pattern.get('supporting_features', [])
+                if supporting_features:
+                    st.markdown("**Supporting Features:**")
+                    for feature in supporting_features:
+                        st.markdown(f"- {feature}")
+                else:
+                    st.info("No supporting features detected")
+            
+            with col2:
+                # Kerley Lines
+                kerley = pattern.get('kerley_lines')
+                if kerley:
+                    st.markdown("#### Interstitial Markings")
+                    
+                    b_detected = kerley.get('b_lines_detected', False)
+                    a_detected = kerley.get('a_lines_detected', False)
+                    
+                    if b_detected or a_detected:
+                        interpretation = kerley.get('interpretation', 'No interpretation available')
+                        st.write(interpretation)
+                        
+                        if b_detected:
+                            b_count = kerley.get('b_line_count', 0)
+                            st.metric("Short peripheral lines", b_count)
+                        
+                        if a_detected:
+                            a_count = kerley.get('a_line_count', 0)
+                            st.metric("Longer oblique lines", a_count)
+                        
+                        kerley_conf = kerley.get('confidence', 0)
+                        st.caption(f"Detection confidence: {kerley_conf:.0%}")
+                    else:
+                        st.info("No significant interstitial markings detected")
+                else:
+                    st.info("Kerley line analysis not available")
+        else:
+            st.warning("⚠️ Pulmonary edema pattern analysis not available")
+            st.info("This could be due to an error during analysis. Check the console for details.")
+        
+        st.divider()
+        
+        # Fissure Section
+        if 'fissures' in results and results['fissures'] is not None:
+            fissures = results['fissures']
+            
+            st.markdown("#### Pulmonary Fissures (Anatomical)")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**Major Fissures (Oblique)**")
+                major_fissures = fissures.get('major_fissures', [])
+                
+                if major_fissures:
+                    for fissure in major_fissures:
+                        side = fissure.get('side', 'unknown').capitalize()
+                        conf = fissure.get('confidence', 0)
+                        
+                        if conf > 0.3:
+                            st.success(f"✓ {side} lung: Detected ({conf:.0%} confidence)")
+                        else:
+                            st.info(f"ℹ️ {side} lung: Low confidence ({conf:.0%})")
+                else:
+                    st.info("Not clearly visualized")
+            
+            with col2:
+                st.markdown("**Minor Fissure (Horizontal)**")
+                minor_fissure = fissures.get('minor_fissure')
+                
+                if minor_fissure:
+                    conf = minor_fissure.get('confidence', 0)
+                    if conf > 0.3:
+                        st.success(f"✓ Right lung: Detected ({conf:.0%} confidence)")
+                    else:
+                        st.info(f"ℹ️ Low confidence detection ({conf:.0%})")
+                else:
+                    st.info("Not visualized (right lung)")
+        else:
+            st.warning("⚠️ Fissure analysis not available")
+    
+    with tab6:
         st.subheader("Abnormality Detection")
         
         sig_findings = results.get('significant_findings', {})

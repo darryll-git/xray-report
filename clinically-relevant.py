@@ -1524,7 +1524,6 @@ def main():
         """)
         
         st.markdown("---")
-        st.markdown("## © 2025 MEDxAI Innovations Pvt Ltd. All rights reserved.")
 
 if __name__ == "__main__":
     main()

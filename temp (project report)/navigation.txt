@@ -1,0 +1,48 @@
+chest-xray-analyzer/
+├── .env                          # API keys (create from .env.example)
+├── .env.example                  # Template for environment variables
+├── requirements.txt              # Python dependencies
+├── README.md                     # This file
+├── app.py                       # Main Streamlit application
+├── models/
+│   ├── __init__.py
+│   ├── segmentation.py          # Lung/heart/mediastinum segmentation
+│   ├── classification.py        # View classification & abnormality detection
+│   ├── measurements.py          # CTR, rib counting, angle assessment
+│   └── report_generator.py     # Groq LLM integration for reports
+└── utils/
+    ├── __init__.py
+    ├── preprocessing.py         # Image preprocessing utilities
+    └── visualization.py         # Overlay masks and annotations
+
+
+
+Input X-Ray Image
+       ↓
+1. Preprocessing & Enhancement (CLAHE)
+       ↓
+2. Anatomy Segmentation
+   - Lungs (bilateral)
+   - Heart
+   - Mediastinum
+       ↓
+3. Technical Quality Assessment
+   - View classification (AP/PA)
+   - Rotation check (clavicle symmetry)
+   - Inspiration (rib counting)
+   - Penetration (exposure quality)
+       ↓
+4. Abnormality Detection
+   - Multi-label classification
+   - 14+ pathology types
+       ↓
+5. Measurements & Calculations
+   - Cardiothoracic ratio
+   - Trachea position
+   - Costophrenic angles
+       ↓
+6. Report Generation (Groq Vision LLM)
+   - Structured radiology report
+   - Clinical interpretation
+       ↓
+Output: Comprehensive Analysis + Report
