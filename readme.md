@@ -66,7 +66,7 @@ Automatic fallback to traditional morphological segmentation if ML model unavail
 
 ### 1. Clone Repository
 ```bash
-git clone <your-repo>
+git clone https://github.com/sriharinmn/xray-report.git
 cd chest-xray-analyzer
 ```
 
