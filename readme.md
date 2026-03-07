@@ -307,18 +307,7 @@ def _generate_template_report(self, findings_summary):
     return custom_report
 ```
 
-## Citation
 
-If you use this code in your research, please cite:
-
-```bibtex
-@software{chest_xray_analyzer,
-  title={AI Chest X-Ray Analyzer},
-  author={Your Name},
-  year={2025},
-  url={https://github.com/yourusername/chest-xray-analyzer}
-}
-```
 
 ### Models Used
 - **torchxrayvision**: Cohen, J. P. et al. (2020)
