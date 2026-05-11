@@ -10,3 +10,8 @@
 /.env.example
 /utils/__pycache__
 /models/__pycache__
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
