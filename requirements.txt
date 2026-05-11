@@ -18,3 +18,4 @@ timm
 albumentations
 opencv-python-headless
 python-docx
+protobuf<=3.20.3
