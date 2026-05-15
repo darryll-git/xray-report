@@ -2,11 +2,13 @@
 import React, { useState, useEffect } from 'react';
 import { FileText, Image as ImageIcon, Wrench, Activity, Wind, AlertTriangle, ShieldAlert, AlertCircle, Info, VolumeX, CheckCircle, Download, Mic } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { jsPDF } from 'jspdf';
 
 export default function ResultsTabs({ data }: { data: any }) {
   const [activeTab, setActiveTab] = useState('Report');
   const [isRecording, setIsRecording] = useState(false);
   const [dictationText, setDictationText] = useState('');
+  const [interimText, setInterimText] = useState('');
   const [showToast, setShowToast] = useState('');
   const recognitionRef = React.useRef<any>(null);
 
@@ -24,24 +26,38 @@ export default function ResultsTabs({ data }: { data: any }) {
     const SpeechRecognition = ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
     const recognition = new SpeechRecognition();
     recognition.lang = 'en-US';
+    recognition.continuous = true;
     recognition.interimResults = true;
     recognition.onresult = (event: any) => {
-      let transcript = '';
+      let finalTranscript = '';
+      let currentInterim = '';
       for (let i = event.resultIndex; i < event.results.length; ++i) {
-        transcript += event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          finalTranscript += event.results[i][0].transcript;
+        } else {
+          currentInterim += event.results[i][0].transcript;
+        }
       }
-      setDictationText(prev => prev + transcript);
+      if (finalTranscript) {
+        setDictationText(prev => {
+          const space = (prev && !prev.endsWith(' ') && !prev.endsWith('\n') && !finalTranscript.startsWith(' ')) ? ' ' : '';
+          return prev + space + finalTranscript;
+        });
+      }
+      setInterimText(currentInterim);
     };
     recognition.onstart = () => {
       setShowToast('Dictation started');
     };
     recognition.onend = () => {
       setIsRecording(false);
+      setInterimText('');
       setShowToast('Dictation ended');
     };
     recognition.onerror = (event: any) => {
       setShowToast('Error: ' + (event as any).error);
       setIsRecording(false);
+      setInterimText('');
     };
     recognitionRef.current = recognition;
     recognition.start();
@@ -98,46 +114,115 @@ export default function ResultsTabs({ data }: { data: any }) {
     document.body.removeChild(a);
   };
 
-  const handleCompiledDownload = () => {
-    let compiled = `AI Chest X-Ray Analysis Report\n`;
-    compiled += `===============================\n\n`;
-    
-    if (data.results.patient_info) {
-      const pi = data.results.patient_info;
-      compiled += `Patient Information:\n`;
-      compiled += `- Name: ${pi.name}\n`;
-      compiled += `- MRN: ${pi.mrn}\n`;
-      compiled += `- DOB: ${pi.dob}\n`;
-      compiled += `- Gender: ${pi.gender}\n`;
-      compiled += `- Referring Physician: ${pi.referring_physician}\n\n`;
+  const downloadPdfReport = (isCompiled: boolean) => {
+    const doc = new jsPDF();
+    let yPos = 20;
+    const lineHeight = 6;
+    const margin = 20;
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const maxLineWidth = pageWidth - margin * 2;
+
+    const addText = (text: string, isBold = false, size = 11) => {
+      doc.setFontSize(size);
+      doc.setFont("helvetica", isBold ? "bold" : "normal");
+      
+      const cleanText = (text || "")
+        .replace(/═/g, '=')
+        .replace(/─/g, '-')
+        .replace(/•/g, '-')
+        .replace(/°/g, ' deg');
+
+      const splitText = doc.splitTextToSize(cleanText, maxLineWidth);
+      
+      for (let i = 0; i < splitText.length; i++) {
+        if (yPos > pageHeight - margin) {
+          doc.addPage();
+          yPos = margin;
+        }
+        doc.text(splitText[i], margin, yPos);
+        yPos += lineHeight;
+      }
+    };
+
+    if (isCompiled) {
+      addText('AI Chest X-Ray Analysis Report', true, 16);
+      yPos += 5;
+      
+      if (data.results.patient_info) {
+        const pi = data.results.patient_info;
+        addText('Patient Information', true, 12);
+        addText(`Name: ${pi.name || 'N/A'}`);
+        addText(`MRN: ${pi.mrn || 'N/A'}`);
+        addText(`DOB: ${pi.dob || 'N/A'}`);
+        addText(`Gender: ${pi.gender || 'N/A'}`);
+        addText(`Referring Physician: ${pi.referring_physician || 'N/A'}`);
+        yPos += 5;
+      }
+      addText('Comprehensive Report', true, 12);
+    } else {
+      addText('Radiology Report', true, 16);
+      yPos += 5;
     }
 
-    compiled += `Comprehensive Report:\n`;
-    compiled += `-------------------------------\n`;
-    compiled += `${data.results.report || "No report generated."}\n\n`;
+    addText(data.results.report || "No report generated.");
+    yPos += 5;
+
     if (dictationText) {
-      compiled += `Dictated Notes:\n${dictationText}\n\n`;
+      addText('Dictated Notes', true, 12);
+      addText(dictationText);
+      yPos += 5;
     }
 
-    if (clinicalSummary) {
-      compiled += `Clinical Findings Summary:\n`;
-      compiled += `-------------------------------\n`;
-      compiled += `Critical Findings: ${clinicalSummary.clinical_findings.CRITICAL.length}\n`;
-      clinicalSummary.clinical_findings.CRITICAL.forEach((i: any) => compiled += `  - ${i.pathology} (${(i.probability*100).toFixed(1)}%)\n`);
-      compiled += `\nHigh Priority: ${clinicalSummary.clinical_findings.HIGH.length}\n`;
-      clinicalSummary.clinical_findings.HIGH.forEach((i: any) => compiled += `  - ${i.pathology} (${(i.probability*100).toFixed(1)}%)\n`);
-      compiled += `\nModerate Findings: ${clinicalSummary.clinical_findings.MODERATE.length}\n`;
-      clinicalSummary.clinical_findings.MODERATE.forEach((i: any) => compiled += `  - ${i.pathology} (${(i.probability*100).toFixed(1)}%)\n`);
-      compiled += `\n`;
+    if (isCompiled && clinicalSummary) {
+      addText('Clinical Findings Summary', true, 12);
+      addText(`Critical Findings: ${clinicalSummary.clinical_findings.CRITICAL?.length || 0}`, true);
+      clinicalSummary.clinical_findings.CRITICAL?.forEach((i: any) => addText(`- ${i.pathology} (${(i.probability*100).toFixed(1)}%)`));
+      
+      addText(`High Priority: ${clinicalSummary.clinical_findings.HIGH?.length || 0}`, true);
+      clinicalSummary.clinical_findings.HIGH?.forEach((i: any) => addText(`- ${i.pathology} (${(i.probability*100).toFixed(1)}%)`));
+      
+      addText(`Moderate Findings: ${clinicalSummary.clinical_findings.MODERATE?.length || 0}`, true);
+      clinicalSummary.clinical_findings.MODERATE?.forEach((i: any) => addText(`- ${i.pathology} (${(i.probability*100).toFixed(1)}%)`));
+      yPos += 5;
+
+      addText('Technical Details', true, 12);
+      addText(`View: ${results.view_classification?.view || "N/A"}`);
+      addText(`Rotation: ${results.rotation?.assessment || "N/A"}`);
+      addText(`Penetration: ${results.penetration?.assessment || "N/A"}`);
+      yPos += 10;
     }
 
-    compiled += `Technical Details:\n`;
-    compiled += `-------------------------------\n`;
-    compiled += `- View: ${results.view_classification?.view || "N/A"}\n`;
-    compiled += `- Rotation: ${results.rotation?.assessment || "N/A"}\n`;
-    compiled += `- Penetration: ${results.penetration?.assessment || "N/A"}\n`;
+    if (data.visualization_base64) {
+      addText('Annotated Image', true, 12);
+      yPos += 5;
+      
+      try {
+        const imgProps = doc.getImageProperties(data.visualization_base64);
+        let pdfWidth = maxLineWidth;
+        let pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+        
+        const maxImageHeight = pageHeight - margin * 2;
+        if (pdfHeight > maxImageHeight) {
+          pdfHeight = maxImageHeight;
+          pdfWidth = (imgProps.width * pdfHeight) / imgProps.height;
+        }
+        
+        if (yPos + pdfHeight > pageHeight - margin) {
+          doc.addPage();
+          yPos = margin;
+        }
+        
+        doc.addImage(data.visualization_base64, imgProps.fileType || 'JPEG', margin, yPos, pdfWidth, pdfHeight);
+        yPos += pdfHeight + 10;
+      } catch (e) {
+        console.error("Failed to add image to PDF", e);
+        addText("(Failed to include image)");
+      }
+    }
 
-    handleDownloadText(`compiled_xray_report_${Date.now()}.txt`, compiled);
+    const filename = isCompiled ? `compiled_xray_report_${Date.now()}.pdf` : `radiology_report_${Date.now()}.pdf`;
+    doc.save(filename);
   };
 
   return (
@@ -164,7 +249,7 @@ export default function ResultsTabs({ data }: { data: any }) {
         ))}
         <div className="flex-1"></div>
         <button 
-          onClick={handleCompiledDownload}
+          onClick={() => downloadPdfReport(true)}
           className="flex items-center justify-center gap-2 px-6 py-4 text-sm font-bold whitespace-nowrap text-blue-600 hover:text-blue-700 hover:bg-blue-100 transition-colors border-l border-slate-200"
         >
           <Download className="w-4 h-4" />
@@ -193,14 +278,10 @@ export default function ResultsTabs({ data }: { data: any }) {
                     <Mic className="w-4 h-4" /> {isRecording ? 'Stop Dictation' : 'Start Dictation'}
                   </button>
                   <button 
-                    onClick={() => {
-                      const baseReport = results.report || '';
-                      const finalReport = dictationText ? `${baseReport}\n\nDictated Notes:\n${dictationText}` : baseReport;
-                      handleDownloadText('radiology_report.txt', finalReport);
-                    }}
+                    onClick={() => downloadPdfReport(false)}
                     className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-medium transition-colors border border-slate-200"
                   >
-                    <Download className="w-4 h-4" /> Download Text
+                    <Download className="w-4 h-4" /> Download PDF
                   </button>
                 </div>
                 <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 whitespace-pre-wrap font-mono text-sm text-slate-700 flex-1 overflow-y-auto leading-relaxed shadow-inner">
@@ -211,6 +292,12 @@ export default function ResultsTabs({ data }: { data: any }) {
                     placeholder="Dictated notes will appear here..."
                     className="mt-4 w-full h-32 p-2 border border-slate-300 rounded-md resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
+                  {interimText && (
+                    <div className="mt-2 text-sm text-slate-500 italic flex items-center gap-2 bg-blue-50 p-2 rounded-md border border-blue-100">
+                      <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+                      Hearing: {interimText}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
