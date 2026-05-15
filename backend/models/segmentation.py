@@ -176,12 +176,39 @@ class AnatomySegmenter:
         
         return mediastinum_mask
     
+    def _detect_spine_midline(self, mask):
+        """
+        Detect the vertical spine midline from the mask image using the gap between lungs.
+        (gap between right lung=1 and left lung=2).
+        """
+        h, w = mask.shape
+
+        # Find the inner edges of each lung across all rows
+        right_lung_inner = []  # rightmost x of right lung (label=1) per row
+        left_lung_inner = []   # leftmost x of left lung (label=2) per row
+
+        for y in range(h):
+            row = mask[y]
+            right_lung_cols = np.where(row == 1)[0]
+            left_lung_cols = np.where(row == 2)[0]
+            if len(right_lung_cols) > 0:
+                right_lung_inner.append(right_lung_cols.max())
+            if len(left_lung_cols) > 0:
+                left_lung_inner.append(left_lung_cols.min())
+
+        if len(right_lung_inner) > 10 and len(left_lung_inner) > 10:
+            # Spine midline = midpoint of the gap between the two lungs
+            midline = (np.median(right_lung_inner) + np.median(left_lung_inner)) / 2.0
+        else:
+            # Fallback: use image center
+            midline = w / 2.0
+
+        return midline
+
     def calculate_ctr_from_mask(self, mask):
         """
-        Balanced CTR calculation using robust contours:
-        - Uses outer lung borders but filters small noisy regions.
-        - Uses convex hull for heart.
-        - Matches clinical CTR range (~0.45–0.60 for most normal X-rays).
+        Calculates cardiothoracic ratio by finding the maximum horizontal 
+        extent of the lungs and heart, robust to mask fragmentation.
         """
 
         lungs = np.zeros_like(mask)
@@ -190,50 +217,64 @@ class AnatomySegmenter:
         heart[mask == 3] = 255
 
         # --- 1. LUNG CONTOURS ---
+        # Use all reasonable lung contours to account for fragmentation
         lung_contours, _ = cv2.findContours(lungs.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if len(lung_contours) < 2:
+        valid_lung_contours = [c for c in lung_contours if cv2.contourArea(c) > 50]
+        
+        if len(valid_lung_contours) == 0:
             return {'ctr': None, 'interpretation': 'Failed: insufficient lung contours'}
 
-        # Sort by area and keep top 2
-        lung_contours = sorted(lung_contours, key=cv2.contourArea, reverse=True)[:2]
-        lung_contours = [cv2.convexHull(c) for c in lung_contours]
-
-        # Get leftmost and rightmost x from both lungs (outer borders)
-        lung_left_edge = min([c[:, 0, 0].min() for c in lung_contours])
-        lung_right_edge = max([c[:, 0, 0].max() for c in lung_contours])
+        lung_left_edge = min([c[:, 0, 0].min() for c in valid_lung_contours])
+        lung_right_edge = max([c[:, 0, 0].max() for c in valid_lung_contours])
         chest_width = lung_right_edge - lung_left_edge
 
         if chest_width <= 0:
             return {'ctr': None, 'interpretation': 'Failed: invalid chest width'}
 
-        midline = (lung_left_edge + lung_right_edge) / 2.0
+        # --- 2. SPINE MIDLINE ---
+        midline = self._detect_spine_midline(mask)
 
-        # --- 2. HEART CONTOUR ---
+        # --- 3. HEART CONTOUR ---
+        # Use all reasonable heart contours to prevent width loss from fragmentation
         heart_contours, _ = cv2.findContours(heart.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if len(heart_contours) == 0:
+        valid_heart_contours = [c for c in heart_contours if cv2.contourArea(c) > 50]
+        
+        if len(valid_heart_contours) == 0:
             return {'ctr': None, 'interpretation': 'Failed: no heart contour'}
 
-        heart_c = max(heart_contours, key=cv2.contourArea)
-        heart_c = cv2.convexHull(heart_c)
+        heart_left = min([c[:, 0, 0].min() for c in valid_heart_contours])
+        heart_right = max([c[:, 0, 0].max() for c in valid_heart_contours])
 
-        heart_left = heart_c[:, 0, 0].min()
-        heart_right = heart_c[:, 0, 0].max()
+        # --- 4. HEART WIDTH (Danzer method) ---
+        heart_width = heart_right - heart_left
+        
+        # Calculate Md and Mr for reporting
+        if heart_left <= midline <= heart_right:
+            Md = heart_right - midline
+            Mr = midline - heart_left
+        else:
+            Md = heart_width / 2.0
+            Mr = heart_width / 2.0
 
-        # --- 3. Heart projections from midline ---
-        left_proj = abs(midline - heart_left)
-        right_proj = abs(heart_right - midline)
-        heart_width = left_proj + right_proj
-
-        # --- 4. CTR ---
+        # --- 5. CTR ---
         ctr = heart_width / chest_width
 
-        # --- 5. Interpretation ---
+        # --- 6. Sanity check ---
+        if ctr < 0.20 or ctr > 0.90:
+            return {
+                'ctr': float(ctr),
+                'interpretation': 'Suspicious CTR value - segmentation may be incorrect',
+                'heart_width': float(heart_width),
+                'chest_width': float(chest_width)
+            }
+
+        # --- 7. Interpretation ---
         if ctr > 0.55:
-            interp = f"Marked cardiomegaly (CTR={ctr:.2f})"
+            interp = f"Marked Cardiomegaly (CTR={ctr:.2f})"
         elif ctr > 0.50:
-            interp = f"Mild cardiomegaly (CTR={ctr:.2f})"
+            interp = f"Mild or Borderline Cardiomegaly (CTR={ctr:.2f})"
         else:
-            interp = f"Normal (CTR={ctr:.2f})"
+            interp = f"Normal heart size (CTR={ctr:.2f})"
 
         return {
             'ctr': float(ctr),
@@ -241,6 +282,8 @@ class AnatomySegmenter:
             'heart_width': float(heart_width),
             'chest_width': float(chest_width),
             'midline': float(midline),
+            'Md': float(Md),
+            'Mr': float(Mr),
             'heart_left_edge': int(heart_left),
             'heart_right_edge': int(heart_right),
             'lung_left_edge': int(lung_left_edge),

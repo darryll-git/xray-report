@@ -1,10 +1,67 @@
 "use client";
-import React, { useState } from 'react';
-import { FileText, Image as ImageIcon, Wrench, Activity, Wind, AlertTriangle, ShieldAlert, AlertCircle, Info, VolumeX, CheckCircle, Download } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { FileText, Image as ImageIcon, Wrench, Activity, Wind, AlertTriangle, ShieldAlert, AlertCircle, Info, VolumeX, CheckCircle, Download, Mic } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function ResultsTabs({ data }: { data: any }) {
   const [activeTab, setActiveTab] = useState('Report');
+  const [isRecording, setIsRecording] = useState(false);
+  const [dictationText, setDictationText] = useState('');
+  const [showToast, setShowToast] = useState('');
+  const recognitionRef = React.useRef<any>(null);
+
+  const handleDictationToggle = () => {
+    if (!('SpeechRecognition' in window) && !(window as any).webkitSpeechRecognition) {
+      setShowToast('Speech Recognition not supported');
+      return;
+    }
+    if (isRecording) {
+      recognitionRef.current?.stop();
+      setIsRecording(false);
+      setShowToast('Dictation stopped');
+      return;
+    }
+    const SpeechRecognition = ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'en-US';
+    recognition.interimResults = true;
+    recognition.onresult = (event: any) => {
+      let transcript = '';
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
+        transcript += event.results[i][0].transcript;
+      }
+      setDictationText(prev => prev + transcript);
+    };
+    recognition.onstart = () => {
+      setShowToast('Dictation started');
+    };
+    recognition.onend = () => {
+      setIsRecording(false);
+      setShowToast('Dictation ended');
+    };
+    recognition.onerror = (event: any) => {
+      setShowToast('Error: ' + (event as any).error);
+      setIsRecording(false);
+    };
+    recognitionRef.current = recognition;
+    recognition.start();
+    setIsRecording(true);
+  };
+
+  useEffect(() => {
+    return () => {
+      recognitionRef.current?.abort?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (showToast) {
+      const timer = setTimeout(() => setShowToast(''), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [showToast]);
+
+
 
   const tabs = [
     { id: 'Report', icon: <FileText className="w-4 h-4" /> },
@@ -58,6 +115,9 @@ export default function ResultsTabs({ data }: { data: any }) {
     compiled += `Comprehensive Report:\n`;
     compiled += `-------------------------------\n`;
     compiled += `${data.results.report || "No report generated."}\n\n`;
+    if (dictationText) {
+      compiled += `Dictated Notes:\n${dictationText}\n\n`;
+    }
 
     if (clinicalSummary) {
       compiled += `Clinical Findings Summary:\n`;
@@ -83,6 +143,11 @@ export default function ResultsTabs({ data }: { data: any }) {
   return (
     <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden mt-0 shadow-sm flex flex-col h-full lg:max-h-[850px] min-h-[600px]">
       <div className="flex overflow-x-auto border-b border-slate-200 no-scrollbar bg-slate-50 shrink-0">
+        {showToast && (
+          <div className="fixed top-4 left-1/2 transform -translate-x-1/2 bg-black bg-opacity-80 text-white px-4 py-2 rounded-md shadow-lg">
+            {showToast}
+          </div>
+        )}
         {tabs.map((tab) => (
           <button
             key={tab.id}
@@ -122,7 +187,17 @@ export default function ResultsTabs({ data }: { data: any }) {
                 <div className="flex justify-between items-center mb-4 shrink-0">
                   <h3 className="text-xl font-bold text-slate-800">Comprehensive Radiology Report</h3>
                   <button 
-                    onClick={() => handleDownloadText('radiology_report.txt', results.report || '')}
+                    onClick={handleDictationToggle}
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded-lg text-sm font-medium transition-colors border border-blue-200"
+                  >
+                    <Mic className="w-4 h-4" /> {isRecording ? 'Stop Dictation' : 'Start Dictation'}
+                  </button>
+                  <button 
+                    onClick={() => {
+                      const baseReport = results.report || '';
+                      const finalReport = dictationText ? `${baseReport}\n\nDictated Notes:\n${dictationText}` : baseReport;
+                      handleDownloadText('radiology_report.txt', finalReport);
+                    }}
                     className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-medium transition-colors border border-slate-200"
                   >
                     <Download className="w-4 h-4" /> Download Text
@@ -130,6 +205,12 @@ export default function ResultsTabs({ data }: { data: any }) {
                 </div>
                 <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 whitespace-pre-wrap font-mono text-sm text-slate-700 flex-1 overflow-y-auto leading-relaxed shadow-inner">
                   {results.report || "No report available."}
+                  <textarea
+                    value={dictationText}
+                    onChange={(e) => setDictationText(e.target.value)}
+                    placeholder="Dictated notes will appear here..."
+                    className="mt-4 w-full h-32 p-2 border border-slate-300 rounded-md resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
                 </div>
               </div>
             )}
